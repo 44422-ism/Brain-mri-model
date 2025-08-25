@@ -7,28 +7,31 @@ import pandas as pd
 
 # === PAGE CONFIG ===
 st.set_page_config(page_title="Brain Tumor Classification + MRI Detector", layout="wide")
-st.title("🧠 Brain Tumor Classification + MRI Detector")
+st.title("🧠 Brain Tumor Classification + MRI Detector (Debug Mode)")
 st.markdown("""
 Upload MRI images to classify them as Brain MRI / Other MRI / Not MRI and detect tumor type.
 
 ⚠ **Note:** Predictions are based on trained models and may **not be 100% accurate**. Always consult a medical professional.
 """)
 
-# === LABELS ===
+# === SETTINGS ===
 MRI_CLASSES = ["Brain MRI", "Other MRI", "Not MRI"]
-TUMOR_CLASSES = ["Tumour"]  # Update if multiple tumor classes exist
+TUMOR_CLASSES = ["Tumour"]  # Add more if needed
+IMG_SIZE = 224
+STRIDE = 112
+MRI_CONF_THRESHOLD = st.slider("MRI confidence threshold", 0.5, 0.95, 0.85, 0.05)
 
 # === MODEL PATHS ===
 MRI_MODEL_PATH = "multi_class_mri_detector.tflite"
 TUMOR_MODEL_PATH = "tumor_classifier_roi.tflite"
 
-# Check if models exist
+# Check models exist
 if not os.path.exists(MRI_MODEL_PATH):
     st.error(f"MRI model not found: {MRI_MODEL_PATH}")
 if not os.path.exists(TUMOR_MODEL_PATH):
     st.error(f"Tumor model not found: {TUMOR_MODEL_PATH}")
 
-# === LOAD TFLITE MODELS ===
+# === LOAD MODELS ===
 @st.cache_resource
 def load_tflite_model(model_path):
     interpreter = tf.lite.Interpreter(model_path=model_path)
@@ -38,10 +41,7 @@ def load_tflite_model(model_path):
 mri_interpreter = load_tflite_model(MRI_MODEL_PATH)
 tumor_interpreter = load_tflite_model(TUMOR_MODEL_PATH)
 
-# === PATCH EXTRACTION USING PIL ONLY ===
-IMG_SIZE = 224
-STRIDE = 112
-
+# === PATCH EXTRACTION (PIL only) ===
 def extract_patches_pil(img, patch_size=IMG_SIZE, stride=STRIDE):
     w, h = img.size
     if w < patch_size or h < patch_size:
@@ -54,18 +54,23 @@ def extract_patches_pil(img, patch_size=IMG_SIZE, stride=STRIDE):
             patches.append(np.array(patch))
     return patches
 
-# === TFLITE PREDICTION ===
+# === PREPROCESS IMAGE ===
+def preprocess_image(img):
+    if img.mode != "RGB":
+        img = img.convert("RGB")
+    arr = np.array(img).astype('float32')
+    # Zero-mean, unit-variance normalization
+    arr = (arr - arr.mean()) / (arr.std() + 1e-6)
+    arr = np.expand_dims(arr, axis=0)
+    return arr
+
+# === PREDICTION ===
 def predict_tflite(interpreter, img_array):
     input_details = interpreter.get_input_details()
     output_details = interpreter.get_output_details()
     interpreter.set_tensor(input_details[0]['index'], img_array)
     interpreter.invoke()
     return interpreter.get_tensor(output_details[0]['index'])[0]
-
-def preprocess_image(img):
-    arr = np.array(img.resize((IMG_SIZE, IMG_SIZE))).astype('float32') / 255.0
-    arr = np.expand_dims(arr, axis=0)
-    return arr
 
 # === FILE UPLOAD ===
 uploaded_files = st.file_uploader("Upload MRI images", type=["jpg","jpeg","png"], accept_multiple_files=True)
@@ -75,23 +80,26 @@ if uploaded_files:
     for file in uploaded_files:
         st.divider()
         st.subheader(f"📂 {file.name}")
-        img = Image.open(file).convert("RGB")
+        img = Image.open(file)
         st.image(img, caption="Uploaded Image", use_column_width=True)
 
-        # === MRI TYPE PREDICTION WITH HIGH-CONFIDENCE FILTER ===
+        # === MRI TYPE PREDICTION ===
         img_array = preprocess_image(img)
         mri_pred = predict_tflite(mri_interpreter, img_array)
         mri_conf = mri_pred.max()
         mri_label = MRI_CLASSES[np.argmax(mri_pred)]
+        st.write(f"MRI Prediction: {mri_label} (Confidence: {mri_conf:.2f})")
 
-        if mri_label == "Brain MRI" and mri_conf >= 0.85:
+        if mri_label == "Brain MRI" and mri_conf >= MRI_CONF_THRESHOLD:
             # === PATCH-BASED TUMOR PREDICTION ===
             patches = extract_patches_pil(img)
             patch_preds = []
-            for patch in patches:
-                patch = np.expand_dims(patch.astype('float32') / 255.0, axis=0)
-                pred = predict_tflite(tumor_interpreter, patch)
+            for i, patch in enumerate(patches):
+                patch_arr = np.expand_dims(patch.astype('float32') / 255.0, axis=0)
+                pred = predict_tflite(tumor_interpreter, patch_arr)
                 patch_preds.append(pred)
+                st.write(f"Patch {i+1}/{len(patches)} prediction: {pred}")
+
             patch_preds = np.array(patch_preds)
             mean_conf = patch_preds.mean(axis=0)
             tumor_label = TUMOR_CLASSES[np.argmax(mean_conf)]
