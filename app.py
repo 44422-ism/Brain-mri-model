@@ -3,7 +3,6 @@ import numpy as np
 from PIL import Image
 import tensorflow as tf
 import os
-import cv2
 import pandas as pd
 
 # === PAGE CONFIG ===
@@ -17,7 +16,7 @@ Upload MRI images to classify them as Brain MRI / Other MRI / Not MRI and detect
 
 # === LABELS ===
 MRI_CLASSES = ["Brain MRI", "Other MRI", "Not MRI"]
-TUMOR_CLASSES = ["Tumour"]  # Single class, update if you have more
+TUMOR_CLASSES = ["Tumour"]  # Update if multiple tumor classes exist
 
 # === LOAD TFLITE MODELS ===
 @st.cache_resource
@@ -29,7 +28,7 @@ def load_tflite_model(model_path):
 mri_interpreter = load_tflite_model("multi_class_mri_detector.tflite")
 tumor_interpreter = load_tflite_model("tumor_classifier_roi.tflite")
 
-# === PATCH EXTRACTION ===
+# === PATCH EXTRACTION USING PIL ONLY ===
 IMG_SIZE = 224
 STRIDE = 112
 
