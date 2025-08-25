@@ -2,6 +2,7 @@ import streamlit as st
 import tensorflow as tf
 import numpy as np
 from PIL import Image
+import pandas as pd
 
 # -------------------- CONFIG --------------------
 st.title("🧠 Brain Tumor Classification")
@@ -41,7 +42,14 @@ def predict_tumor(image):
     classes = ["Glioma", "Meningioma", "Pituitary"]
     tumor_label = classes[np.argmax(tumor_pred)]
     tumor_conf = float(np.max(tumor_pred))
-    return tumor_label, tumor_conf
+    
+    # Create summary table
+    summary_df = pd.DataFrame({
+        "Class": classes,
+        "Probability": [round(float(p), 4) for p in tumor_pred]
+    }).sort_values(by="Probability", ascending=False)
+    
+    return tumor_label, tumor_conf, summary_df
 
 # -------------------- UI --------------------
 uploaded_file = st.file_uploader("Upload a Brain MRI Image", type=["jpg", "jpeg", "png"])
@@ -52,5 +60,8 @@ if uploaded_file is not None:
     
     if st.button("Classify Tumor"):
         with st.spinner("Analyzing..."):
-            tumor_label, tumor_conf = predict_tumor(image)
+            tumor_label, tumor_conf, summary_df = predict_tumor(image)
             st.success(f"✅ Tumor Prediction: **{tumor_label}** (Confidence: {tumor_conf:.2f})")
+            
+            st.subheader("📊 Prediction Summary")
+            st.dataframe(summary_df, use_container_width=True)
