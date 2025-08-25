@@ -18,6 +18,16 @@ Upload MRI images to classify them as Brain MRI / Other MRI / Not MRI and detect
 MRI_CLASSES = ["Brain MRI", "Other MRI", "Not MRI"]
 TUMOR_CLASSES = ["Tumour"]  # Update if multiple tumor classes exist
 
+# === MODEL PATHS ===
+MRI_MODEL_PATH = "multi_class_mri_detector.tflite"
+TUMOR_MODEL_PATH = "tumor_classifier_roi.tflite"
+
+# Check if models exist
+if not os.path.exists(MRI_MODEL_PATH):
+    st.error(f"MRI model not found: {MRI_MODEL_PATH}")
+if not os.path.exists(TUMOR_MODEL_PATH):
+    st.error(f"Tumor model not found: {TUMOR_MODEL_PATH}")
+
 # === LOAD TFLITE MODELS ===
 @st.cache_resource
 def load_tflite_model(model_path):
@@ -25,8 +35,8 @@ def load_tflite_model(model_path):
     interpreter.allocate_tensors()
     return interpreter
 
-mri_interpreter = load_tflite_model("multi_class_mri_detector.tflite")
-tumor_interpreter = load_tflite_model("tumor_classifier_roi.tflite")
+mri_interpreter = load_tflite_model(MRI_MODEL_PATH)
+tumor_interpreter = load_tflite_model(TUMOR_MODEL_PATH)
 
 # === PATCH EXTRACTION USING PIL ONLY ===
 IMG_SIZE = 224
