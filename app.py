@@ -8,7 +8,7 @@ import pandas as pd
 st.set_page_config(page_title="Brain Tumor Classification + MRI Detector", layout="wide")
 st.title("🧠 Brain Tumor Classification + MRI Detector")
 st.markdown("""
-Upload MRI images to classify them as Brain MRI / Other MRI / Not MRI, detect tumor type, and visualize tumor location.
+Upload MRI images to detect tumors and classify them as Brain MRI / Other MRI / Not MRI.
 
 ⚠ **Note:** Predictions are based on trained models and may **not be 100% accurate**. Always consult a medical professional.
 """)
@@ -42,11 +42,8 @@ def preprocess_image(img, interpreter):
         img = img.convert("L")
 
     img = img.resize((w,h))
-    arr = np.array(img).astype('float32')
-    arr = arr / 255.0
-
-    if len(arr.shape) == 3:
-        arr = np.expand_dims(arr, axis=0)
+    arr = np.array(img).astype('float32') / 255.0
+    arr = np.expand_dims(arr, axis=0)
 
     if arr.shape[-1] != c:
         arr = np.repeat(arr, c, axis=-1)
@@ -72,17 +69,17 @@ def extract_patches(img, patch_size=224, stride=112):
             patches.append(patch)
             positions.append((x,y))
     if len(patches) == 0:
-        # if image smaller than patch, use whole image
         patches = [img.resize((patch_size, patch_size))]
         positions = [(0,0)]
     return patches, positions
 
 # === HEATMAP GENERATION ===
-def generate_heatmap(img, positions, confidences, patch_size=224):
+def generate_heatmap(img, positions, confidences, patch_size=224, min_conf=0.5):
     heat = Image.new("RGBA", img.size)
     for (x,y), conf in zip(positions, confidences):
-        overlay = Image.new("RGBA", (patch_size, patch_size), (255,0,0,int(conf*150)))
-        heat.paste(overlay, (x,y), overlay)
+        if conf >= min_conf:
+            overlay = Image.new("RGBA", (patch_size, patch_size), (255,0,0,int(conf*150)))
+            heat.paste(overlay, (x,y), overlay)
     return Image.alpha_composite(img.convert("RGBA"), heat)
 
 # === FILE UPLOAD ===
@@ -96,7 +93,7 @@ if uploaded_files:
         img = Image.open(file)
         st.image(img, caption="Uploaded Image", use_column_width=True)
 
-        # === MRI DETECTION ===
+        # === MRI DETECTION (display only) ===
         img_array = preprocess_image(img, mri_interpreter)
         mri_pred = predict_tflite(mri_interpreter, img_array)
         mri_conf = mri_pred.max()
@@ -120,7 +117,7 @@ if uploaded_files:
         st.write(f"Tumor Prediction: {tumor_label} (Confidence: {tumor_conf:.2f})")
 
         # === HEATMAP ===
-        heatmap_img = generate_heatmap(img, positions, patch_confidences)
+        heatmap_img = generate_heatmap(img, positions, patch_confidences, min_conf=0.5)
         st.image(heatmap_img, caption="Tumor Heatmap Overlay", use_column_width=True)
 
         # === RECORD RESULTS ===
