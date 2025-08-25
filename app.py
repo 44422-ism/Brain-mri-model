@@ -3,126 +3,123 @@ import tensorflow as tf
 import numpy as np
 import pandas as pd
 from PIL import Image
-import io
+from datetime import datetime
 
-# -----------------------------
-# CONFIGURATION
-# -----------------------------
-st.set_page_config(page_title="Brain Tumor Detector", layout="wide")
-MODEL_PATH = "tumor_classifier_roi (2).tflite"
+st.set_page_config(page_title="Brain Tumor Classification", layout="wide")
 
-# Tumor information for info widget
+# -------------------------------
+# Constants
+# -------------------------------
+TUMOR_MODEL_PATH = "tumor_classifier_roi (2).tflite"
+TUMOR_CLASSES = ["Glioma", "Meningioma", "Pituitary", "No Tumor"]
+
 TUMOR_INFO = {
-    "Glioma": "Gliomas are tumors that start in the glial cells of the brain or spinal cord.",
-    "Meningioma": "Meningiomas are tumors that form in the membranes that surround the brain and spinal cord.",
-    "Pituitary": "Pituitary tumors are abnormal growths in the pituitary gland, located at the base of the brain.",
-    "No Tumor": "No tumor detected in the scan."
+    "Glioma": "Gliomas are tumors that arise from glial cells in the brain or spine.",
+    "Meningioma": "Meningiomas develop from the meninges, the protective membranes covering the brain and spinal cord.",
+    "Pituitary": "Pituitary tumors form in the pituitary gland at the base of the brain.",
+    "No Tumor": "No tumor detected in this scan."
 }
 
-# -----------------------------
-# LOAD MODEL
-# -----------------------------
+CONF_THRESHOLD = 0.70  # Minimum confidence to accept prediction
+
+# -------------------------------
+# Load TFLite Model
+# -------------------------------
 @st.cache_resource
-def load_model():
-    interpreter = tf.lite.Interpreter(model_path=MODEL_PATH)
+def load_tflite_model(model_path):
+    interpreter = tf.lite.Interpreter(model_path=model_path)
     interpreter.allocate_tensors()
     return interpreter
 
-tumor_interpreter = load_model()
+tumor_interpreter = load_tflite_model(TUMOR_MODEL_PATH)
+input_details = tumor_interpreter.get_input_details()
+output_details = tumor_interpreter.get_output_details()
 
-# -----------------------------
-# IMAGE PREPROCESSING
-# -----------------------------
-def preprocess_image(image, input_shape):
-    img = image.resize((input_shape[2], input_shape[1]))
-    img_array = np.array(img).astype(np.float32)
-    img_array = img_array / 255.0
+# -------------------------------
+# Predict Tumor
+# -------------------------------
+def predict_tumor(image: Image.Image):
+    img = image.resize((input_details[0]['shape'][2], input_details[0]['shape'][1]))
+    img_array = np.array(img, dtype=np.float32) / 255.0
+    if len(img_array.shape) == 2:  # Grayscale image
+        img_array = np.stack((img_array,)*3, axis=-1)
     img_array = np.expand_dims(img_array, axis=0)
-    return img_array
 
-# -----------------------------
-# PREDICTION FUNCTION
-# -----------------------------
-def predict_tumor(image):
-    input_details = tumor_interpreter.get_input_details()
-    output_details = tumor_interpreter.get_output_details()
-
-    img_array = preprocess_image(image, input_details[0]['shape'])
     tumor_interpreter.set_tensor(input_details[0]['index'], img_array)
     tumor_interpreter.invoke()
     tumor_pred = tumor_interpreter.get_tensor(output_details[0]['index'])[0]
+    
+    # Normalize probabilities to mitigate bias
+    tumor_pred = tumor_pred / np.sum(tumor_pred)
+    
+    max_index = np.argmax(tumor_pred)
+    tumor_conf = float(tumor_pred[max_index])
+    
+    # Confidence thresholding
+    if tumor_conf < CONF_THRESHOLD:
+        tumor_label = "Uncertain – Needs further review"
+    else:
+        tumor_label = TUMOR_CLASSES[max_index]
+    
+    # Summary Table
+    summary_df = pd.DataFrame({
+        "Class": TUMOR_CLASSES,
+        "Probability": [round(float(p), 4) for p in tumor_pred]
+    }).sort_values(by="Probability", ascending=False)
+    
+    return tumor_label, tumor_conf, summary_df
 
-    if len(tumor_pred) == 1:  # Binary Model
-        prob = float(tumor_pred[0])
-        tumor_label = "Tumor Detected" if prob >= 0.5 else "No Tumor Detected"
-        confidence = round(prob if prob >= 0.5 else 1 - prob, 4)
-        summary_df = pd.DataFrame({
-            "Prediction": [tumor_label],
-            "Confidence": [confidence]
-        })
-        return tumor_label, confidence, summary_df
-    else:  # Multi-class Model
-        classes = ["Glioma", "Meningioma", "Pituitary", "No Tumor"]
-        tumor_label = classes[np.argmax(tumor_pred)]
-        tumor_conf = float(np.max(tumor_pred))
-        summary_df = pd.DataFrame({
-            "Class": classes,
-            "Probability": [round(float(p), 4) for p in tumor_pred.tolist()]
-        }).sort_values(by="Probability", ascending=False)
-        return tumor_label, tumor_conf, summary_df
+# -------------------------------
+# Session State for Scan History
+# -------------------------------
+if "scan_history" not in st.session_state:
+    st.session_state["scan_history"] = []
 
-# -----------------------------
-# SCAN HISTORY STORAGE
-# -----------------------------
-if "history" not in st.session_state:
-    st.session_state.history = []
+# -------------------------------
+# App UI
+# -------------------------------
+st.title("🧠 Brain Tumor Classification")
+st.markdown("""
+Upload MRI scans to detect tumors. Predictions are **not 100% accurate** and should be verified by a medical professional.
+""")
 
-# -----------------------------
-# APP UI
-# -----------------------------
-st.title("🧠 Brain Tumor Detection")
-st.markdown("Upload MRI images to detect tumors. ⚠ Predictions may not be 100% accurate. Consult a medical professional.")
-
-uploaded_file = st.file_uploader("Upload an MRI Image", type=["jpg", "jpeg", "png"])
+uploaded_file = st.file_uploader("Upload Brain MRI", type=["jpg", "jpeg", "png"])
 
 if uploaded_file:
     image = Image.open(uploaded_file).convert("RGB")
-    st.image(image, caption="Uploaded Image", use_column_width=True)
-
-    # Predict
-    with st.spinner("Analyzing image..."):
-        tumor_label, tumor_conf, summary_df = predict_tumor(image)
-
-    # Display Results
-    st.subheader("✅ Prediction Result")
-    st.write(f"**Tumor Prediction:** {tumor_label} (Confidence: {tumor_conf:.2f})")
-
-    st.subheader("📊 Prediction Summary")
+    st.image(image, caption="Uploaded Scan", use_column_width=True)
+    
+    # Tumor Prediction
+    tumor_label, tumor_conf, summary_df = predict_tumor(image)
+    
+    st.markdown(f"### ✅ Tumor Prediction: {tumor_label} (Confidence: {round(tumor_conf,2)})")
+    
+    # Display Summary Table
+    st.markdown("### Probability Summary")
     st.dataframe(summary_df)
+    
+    # Visualization (optional)
+    st.bar_chart(summary_df.set_index("Class"))
 
-    if len(summary_df) > 1:
-        st.bar_chart(summary_df.set_index("Class"))
-
-    # Save to history
-    st.session_state.history.append({
-        "Image": uploaded_file.name,
-        "Prediction": tumor_label,
-        "Confidence": round(tumor_conf, 4)
+    # Save scan history
+    st.session_state.scan_history.append({
+        "Filename": uploaded_file.name,
+        "Predicted Tumor": tumor_label,
+        "Confidence": round(tumor_conf, 2),
+        "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     })
 
-# -----------------------------
-# HISTORY SECTION
-# -----------------------------
-st.sidebar.header("📜 Scan History")
-if st.session_state.history:
-    hist_df = pd.DataFrame(st.session_state.history)
-    st.sidebar.dataframe(hist_df)
-else:
-    st.sidebar.write("No scans yet.")
+# -------------------------------
+# Scan History
+# -------------------------------
+if st.session_state.scan_history:
+    st.markdown("### 🗂 Scan History")
+    history_df = pd.DataFrame(st.session_state.scan_history)
+    st.dataframe(history_df)
 
-# -----------------------------
-# TUMOR INFORMATION SECTION
-# -----------------------------
-st.sidebar.header("ℹ Tumor Information")
-selected_info = st.sidebar.selectbox("Select Tumor Type", list(TUMOR_INFO.keys()))
-st.sidebar.write(TUMOR_INFO[selected_info])
+# -------------------------------
+# Tumor Info
+# -------------------------------
+st.markdown("### 📚 Tumor Information")
+for tumor, info in TUMOR_INFO.items():
+    st.markdown(f"**{tumor}:** {info}")
