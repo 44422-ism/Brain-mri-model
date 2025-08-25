@@ -1,6 +1,5 @@
-tensorflow==2.13.0
-protobuf<4
+tensorflow
 streamlit
-matplotlib
-seaborn
+numpy
+pandas
 pillow
