@@ -16,7 +16,7 @@ Upload MRI images to classify them as Brain MRI / Other MRI / Not MRI and detect
 
 # === SETTINGS ===
 MRI_CLASSES = ["Brain MRI", "Other MRI", "Not MRI"]
-TUMOR_CLASSES = ["Tumour"]  # Add more if needed
+TUMOR_CLASSES = ["Tumour"]  # Add more classes if needed
 IMG_SIZE = 224
 STRIDE = 112
 MRI_CONF_THRESHOLD = st.slider("MRI confidence threshold", 0.5, 0.95, 0.85, 0.05)
@@ -55,13 +55,32 @@ def extract_patches_pil(img, patch_size=IMG_SIZE, stride=STRIDE):
     return patches
 
 # === PREPROCESS IMAGE ===
-def preprocess_image(img):
-    if img.mode != "RGB":
+def preprocess_image(img, interpreter):
+    """Resize, normalize, and match the TFLite model input shape."""
+    input_details = interpreter.get_input_details()
+    input_shape = input_details[0]['shape']  # e.g., [1,224,224,3]
+    h, w, c = input_shape[1], input_shape[2], input_shape[3]
+
+    # Convert grayscale to RGB if needed
+    if img.mode != "RGB" and c == 3:
         img = img.convert("RGB")
+    elif img.mode != "L" and c == 1:
+        img = img.convert("L")
+
+    img = img.resize((w, h))
     arr = np.array(img).astype('float32')
-    # Zero-mean, unit-variance normalization
+
+    # Normalize to zero-mean, unit-variance
     arr = (arr - arr.mean()) / (arr.std() + 1e-6)
-    arr = np.expand_dims(arr, axis=0)
+
+    # Add batch dimension if missing
+    if len(arr.shape) == 3:
+        arr = np.expand_dims(arr, axis=0)
+
+    # If model expects 3 channels but array has 1, replicate channels
+    if arr.shape[-1] != c:
+        arr = np.repeat(arr, c, axis=-1)
+
     return arr
 
 # === PREDICTION ===
@@ -84,7 +103,7 @@ if uploaded_files:
         st.image(img, caption="Uploaded Image", use_column_width=True)
 
         # === MRI TYPE PREDICTION ===
-        img_array = preprocess_image(img)
+        img_array = preprocess_image(img, mri_interpreter)
         mri_pred = predict_tflite(mri_interpreter, img_array)
         mri_conf = mri_pred.max()
         mri_label = MRI_CLASSES[np.argmax(mri_pred)]
@@ -96,6 +115,9 @@ if uploaded_files:
             patch_preds = []
             for i, patch in enumerate(patches):
                 patch_arr = np.expand_dims(patch.astype('float32') / 255.0, axis=0)
+                # replicate channels if needed
+                if patch_arr.shape[-1] == 1 and tumor_interpreter.get_input_details()[0]['shape'][-1] == 3:
+                    patch_arr = np.repeat(patch_arr, 3, axis=-1)
                 pred = predict_tflite(tumor_interpreter, patch_arr)
                 patch_preds.append(pred)
                 st.write(f"Patch {i+1}/{len(patches)} prediction: {pred}")
