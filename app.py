@@ -1,188 +1,109 @@
-<<<<<<< HEAD
 import streamlit as st
 import numpy as np
 from PIL import Image
-import pandas as pd
 import tensorflow as tf
-=======
-# ==========================
-# Brain Tumor + MRI Detection App
-# ==========================
-
 import os
-import numpy as np
-import tensorflow as tf
-from tensorflow.keras.utils import img_to_array
-from PIL import Image
-import streamlit as st
+import cv2
 import pandas as pd
->>>>>>> f206414 (Initial commit for Streamlit app)
 
-# -------------------------
-# Constants
-# -------------------------
-<<<<<<< HEAD
-TUMOR_MODEL_PATH = "best_model.tflite"
-MRI_MODEL_PATH = "mri_detector_model.tflite"
-IMG_SIZE = (224, 224)
-CLASS_LABELS = ["Glioma", "Meningioma", "Pituitary"]
+# === PAGE CONFIG ===
+st.set_page_config(page_title="Brain Tumor Classification + MRI Detector", layout="wide")
+st.title("🧠 Brain Tumor Classification + MRI Detector")
+st.markdown("""
+Upload MRI images to classify them as Brain MRI / Other MRI / Not MRI and detect tumor type.
 
-# -------------------------
-# Load TFLite Models
-# -------------------------
+⚠ **Note:** Predictions are based on trained models and may **not be 100% accurate**. Always consult a medical professional.
+""")
+
+# === LABELS ===
+MRI_CLASSES = ["Brain MRI", "Other MRI", "Not MRI"]
+TUMOR_CLASSES = ["Tumour"]  # Single class, update if you have more
+
+# === LOAD TFLITE MODELS ===
+@st.cache_resource
 def load_tflite_model(model_path):
     interpreter = tf.lite.Interpreter(model_path=model_path)
     interpreter.allocate_tensors()
+    return interpreter
+
+mri_interpreter = load_tflite_model("multi_class_mri_detector.tflite")
+tumor_interpreter = load_tflite_model("tumor_classifier_roi.tflite")
+
+# === PATCH EXTRACTION ===
+IMG_SIZE = 224
+STRIDE = 112
+
+def extract_patches_pil(img, patch_size=IMG_SIZE, stride=STRIDE):
+    w, h = img.size
+    if w < patch_size or h < patch_size:
+        img = img.resize((patch_size, patch_size))
+        return [np.array(img)]
+    patches = []
+    for y in range(0, h - patch_size + 1, stride):
+        for x in range(0, w - patch_size + 1, stride):
+            patch = img.crop((x, y, x + patch_size, y + patch_size))
+            patches.append(np.array(patch))
+    return patches
+
+# === TFLITE PREDICTION ===
+def predict_tflite(interpreter, img_array):
     input_details = interpreter.get_input_details()
     output_details = interpreter.get_output_details()
-    return interpreter, input_details, output_details
-
-tumor_interpreter, tumor_input, tumor_output = load_tflite_model(TUMOR_MODEL_PATH)
-mri_interpreter, mri_input, mri_output = load_tflite_model(MRI_MODEL_PATH)
-
-st.success("✅ TFLite models loaded successfully!")
-
-# -------------------------
-# Helper Functions
-# -------------------------
-def preprocess_image(img: Image.Image):
-    img_resized = img.resize(IMG_SIZE)
-    img_array = np.array(img_resized, dtype=np.float32) / 255.0
-    return np.expand_dims(img_array, axis=0)
-
-def predict_tflite(interpreter, input_details, output_details, img_array):
-    interpreter.set_tensor(input_details[0]['index'], img_array.astype(np.float32))
+    interpreter.set_tensor(input_details[0]['index'], img_array)
     interpreter.invoke()
-    output_data = interpreter.get_tensor(output_details[0]['index'])
-    return output_data[0]
-=======
-TUMOR_MODEL_PATH = "best_model.h5"           # Brain tumor classifier
-MRI_DETECTOR_PATH = "mri_detector_model.h5"  # MRI detector
-IMG_SIZE = (224, 224)
-CLASS_LABELS = ["Glioma", "Meningioma", "Pituitary"]  # Brain tumor classes
->>>>>>> f206414 (Initial commit for Streamlit app)
+    return interpreter.get_tensor(output_details[0]['index'])[0]
 
-# -------------------------
-# Streamlit UI
-# -------------------------
-st.title("Brain Tumor MRI Classification + MRI Detector")
-<<<<<<< HEAD
-st.write("Upload multiple images. Non-MRI images will be skipped automatically.")
+def preprocess_image(img):
+    arr = np.array(img.resize((IMG_SIZE, IMG_SIZE))).astype('float32') / 255.0
+    arr = np.expand_dims(arr, axis=0)
+    return arr
 
-uploaded_files = st.file_uploader(
-    "Upload Image(s)", type=["jpg","jpeg","png"], accept_multiple_files=True
-)
+# === FILE UPLOAD ===
+uploaded_files = st.file_uploader("Upload MRI images", type=["jpg","jpeg","png"], accept_multiple_files=True)
+results = []
 
 if uploaded_files:
-    results = []
+    for file in uploaded_files:
+        st.divider()
+        st.subheader(f"📂 {file.name}")
+        img = Image.open(file).convert("RGB")
+        st.image(img, caption="Uploaded Image", use_column_width=True)
 
-    for uploaded_file in uploaded_files:
-        try:
-            img = Image.open(uploaded_file).convert("RGB")
-            st.image(img, caption=f"Uploaded: {uploaded_file.name}", use_column_width=True)
-            img_array = preprocess_image(img)
+        # === MRI TYPE PREDICTION WITH HIGH-CONFIDENCE FILTER ===
+        img_array = preprocess_image(img)
+        mri_pred = predict_tflite(mri_interpreter, img_array)
+        mri_conf = mri_pred.max()
+        mri_label = MRI_CLASSES[np.argmax(mri_pred)]
 
-            # MRI Detection
-            mri_pred = float(predict_tflite(mri_interpreter, mri_input, mri_output, img_array)[0])
-            if mri_pred > 0.5:  # MRI detected
-                # Tumor Prediction
-                tumor_pred = predict_tflite(tumor_interpreter, tumor_input, tumor_output, img_array)
-                class_idx = int(np.argmax(tumor_pred))
-                confidence = float(tumor_pred[class_idx])
-                st.success(f"Predicted Tumor Type: {CLASS_LABELS[class_idx]}")
-                st.info(f"Confidence: {confidence:.2f}")
-                results.append((uploaded_file.name, "MRI", CLASS_LABELS[class_idx], confidence))
-            else:
-                st.warning(f"⚠ {uploaded_file.name}: Non-MRI / Random object")
-                results.append((uploaded_file.name, "Non-MRI", "N/A", 0.0))
+        if mri_label == "Brain MRI" and mri_conf >= 0.85:
+            # === PATCH-BASED TUMOR PREDICTION ===
+            patches = extract_patches_pil(img)
+            patch_preds = []
+            for patch in patches:
+                patch = np.expand_dims(patch.astype('float32') / 255.0, axis=0)
+                pred = predict_tflite(tumor_interpreter, patch)
+                patch_preds.append(pred)
+            patch_preds = np.array(patch_preds)
+            mean_conf = patch_preds.mean(axis=0)
+            tumor_label = TUMOR_CLASSES[np.argmax(mean_conf)]
+            tumor_conf = mean_conf.max()
+        else:
+            mri_label = "Unknown / Not MRI"
+            tumor_label = "N/A"
+            tumor_conf = 0.0
 
-        except Exception as e:
-            st.error(f"❌ Error processing {uploaded_file.name}: {str(e)}")
-            results.append((uploaded_file.name, "Error", "N/A", 0.0))
+        results.append({
+            "File Name": file.name,
+            "MRI Type": mri_label,
+            "MRI Confidence": round(float(mri_conf), 2),
+            "Tumor Type": tumor_label,
+            "Tumor Confidence": round(float(tumor_conf), 2)
+        })
 
-    # Summary Table
-    if results:
-        df = pd.DataFrame(results, columns=["File Name", "MRI Status", "Tumor Type", "Confidence"])
-        st.subheader("Summary of Predictions")
-        st.dataframe(df)
-=======
-st.write(
-    "Upload multiple images (brain MRI, other body MRI, non-MRI, random objects) "
-    "for detection and classification."
-)
+    # === SUMMARY TABLE ===
+    st.subheader("📊 Summary Table")
+    df = pd.DataFrame(results)
+    st.table(df)
 
-# -------------------------
-# Load Models
-# -------------------------
-model_loaded = False
-if os.path.exists(TUMOR_MODEL_PATH) and os.path.exists(MRI_DETECTOR_PATH):
-    tumor_model = tf.keras.models.load_model(TUMOR_MODEL_PATH)
-    mri_detector = tf.keras.models.load_model(MRI_DETECTOR_PATH)
-    st.success("✅ Models loaded successfully!")
-    model_loaded = True
 else:
-    st.error(
-        "❌ Model files not found. Upload 'best_model.h5' and 'mri_detector_model.h5' "
-        "in the same directory as this script."
-    )
-
-# -------------------------
-# Helper Function
-# -------------------------
-def preprocess_image(img: Image.Image) -> np.ndarray:
-    """Resize and normalize image for model input."""
-    img_resized = img.resize(IMG_SIZE)
-    img_array = img_to_array(img_resized) / 255.0
-    return np.expand_dims(img_array, axis=0)
-
-# -------------------------
-# Batch Upload & Prediction
-# -------------------------
-if model_loaded:
-    uploaded_files = st.file_uploader(
-        "Upload Image(s)", type=["jpg", "jpeg", "png"], accept_multiple_files=True
-    )
-
-    if uploaded_files:
-        results = []
-
-        for uploaded_file in uploaded_files:
-            try:
-                img = Image.open(uploaded_file).convert("RGB")
-                st.image(img, caption=f"Uploaded: {uploaded_file.name}", use_column_width=True)
-                img_array = preprocess_image(img)
-
-                # MRI Detection
-                mri_pred = float(mri_detector.predict(img_array)[0][0])
-                if mri_pred > 0.5:
-                    st.success(f"✅ {uploaded_file.name}: MRI detected")
-
-                    # Brain Tumor Classification
-                    tumor_pred = tumor_model.predict(img_array)[0]
-                    class_idx = int(np.argmax(tumor_pred))
-                    confidence = float(tumor_pred[class_idx])
-
-                    st.success(f"Predicted Tumor Type: {CLASS_LABELS[class_idx]}")
-                    st.info(f"Confidence: {confidence:.2f}")
-                    results.append((uploaded_file.name, CLASS_LABELS[class_idx], confidence))
-                else:
-                    st.warning(f"⚠ {uploaded_file.name}: Not an MRI")
-                    results.append((uploaded_file.name, "Not MRI", mri_pred))
-
-            except Exception as e:
-                st.error(f"❌ Error processing {uploaded_file.name}: {str(e)}")
-                results.append((uploaded_file.name, "Error", 0.0))
-
-        # Summary Table
-        if results:
-            df = pd.DataFrame(results, columns=["File Name", "Prediction", "Confidence"])
-            st.subheader("Summary of Predictions")
-            st.dataframe(df)
-
-# -------------------------
-# Note for Users
-# -------------------------
-st.write(
-    "ℹ Note: The model's predictions are based on training data and may not be 100% accurate."
-)
->>>>>>> f206414 (Initial commit for Streamlit app)
+    st.warning("Please upload one or more MRI images to get predictions.")
